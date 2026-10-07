@@ -1168,7 +1168,7 @@ Object.assign(STK_IMG.xc,{0:'xe-hoi',1:'cong-nong',5:'xe-buyt',6:'can-cau',7:'co
 Object.entries({2:'than-lan',6:'tia-chop',7:'bong-tuyet',17:'mat-troi',20:'buom',23:'khien'}).forEach(([i,f])=>{STK_IMG.nv[i]=f;});
 Object.entries({13:'kinh-thien-van',14:'ngoi-sao',15:'cau-vong',27:'dua-phep',30:'koala'}).forEach(([i,f])=>{STK_IMG.ch[i]=f;});
 // STK_V: đổi số này mỗi khi thêm/thay ảnh sticker để trình duyệt bỏ bản cache cũ (kể cả lỗi 404 đã cache 7 ngày)
-const STK_V='?v=20260925';
+const STK_V='?v=20261007';
 STK_IMG.nv.forEach((f,i)=>{if(f&&STICKERS[i])STICKERS[i].img='/stickers/nhan-vat/'+f+'.webp'+STK_V;});
 Object.keys(STK_IMG.xc).forEach(i=>{STICKERS_EN[i].img='/stickers/xe-co/'+STK_IMG.xc[i]+'.webp'+STK_V;});
 STK_IMG.ch.forEach((f,i)=>{if(f&&SHOP[i])SHOP[i].img='/stickers/cua-hang/'+f+'.webp'+STK_V;});
