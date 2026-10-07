@@ -11,6 +11,10 @@ CREATE TABLE users (
   email         TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
   display_name  TEXT,                  -- tên hiển thị (admin / phụ huynh)
+  session_id    TEXT,                  -- phiên đăng nhập hiện tại (1 tài khoản = 1 thiết bị)
+  last_login_at     TIMESTAMPTZ,       -- lần đăng nhập gần nhất
+  last_login_ip     TEXT,
+  last_login_device TEXT,              -- User-Agent của thiết bị đăng nhập gần nhất
   role          user_role NOT NULL,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -85,3 +89,6 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value      JSONB NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 09/2026: thang xu mới (giảm 5 lần). DB tạo mới dùng luôn coin_v = 2.
+ALTER TABLE student_rewards ADD COLUMN IF NOT EXISTS coin_v INTEGER NOT NULL DEFAULT 2;

@@ -20,6 +20,10 @@ const pool = new Pool({
 // mới lên Vercel KHÔNG cần vào Neon chạy SQL thủ công.
 const SCHEMA_SQL = `
   ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS session_id TEXT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip TEXT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_device TEXT;
   CREATE TABLE IF NOT EXISTS student_rewards (
     student_id INTEGER PRIMARY KEY REFERENCES students(id) ON DELETE CASCADE,
     stickers   JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -29,6 +33,10 @@ const SCHEMA_SQL = `
   );
   ALTER TABLE student_rewards ADD COLUMN IF NOT EXISTS en_stickers JSONB NOT NULL DEFAULT '[]'::jsonb;
   ALTER TABLE students ADD COLUMN IF NOT EXISTS total_points INTEGER NOT NULL DEFAULT 0;
+  -- 09/2026: giảm xu 5 lần (chạy đúng 1 lần nhờ cột coin_v)
+  ALTER TABLE student_rewards ADD COLUMN IF NOT EXISTS coin_v INTEGER NOT NULL DEFAULT 1;
+  UPDATE student_rewards SET coins = coins / 5, coin_v = 2 WHERE coin_v < 2;
+  ALTER TABLE student_rewards ALTER COLUMN coin_v SET DEFAULT 2;
   CREATE TABLE IF NOT EXISTS app_settings (
     key        TEXT PRIMARY KEY,
     value      JSONB NOT NULL,
@@ -41,8 +49,11 @@ const SCHEMA_SQL = `
 const SCHEMA_CHECK_SQL = `
   SELECT
     EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('users') AND attname = 'display_name' AND NOT attisdropped)
+    AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('users') AND attname = 'session_id' AND NOT attisdropped)
+    AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('users') AND attname = 'last_login_device' AND NOT attisdropped)
     AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('student_rewards') AND attname = 'en_stickers' AND NOT attisdropped)
     AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('students') AND attname = 'total_points' AND NOT attisdropped)
+    AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('student_rewards') AND attname = 'coin_v' AND NOT attisdropped)
     AND to_regclass('app_settings') IS NOT NULL
     AS ok
 `;

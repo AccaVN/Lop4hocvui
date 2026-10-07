@@ -160,13 +160,17 @@ router.put('/me/rewards', async (req, res) => {
   if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   const stickers = Array.isArray(req.body.stickers) ? req.body.stickers.map(Number).filter(Number.isInteger) : [];
   const shop = Array.isArray(req.body.shop) ? req.body.shop.map(Number).filter(Number.isInteger) : [];
-  const coins = Math.max(0, Number(req.body.coins) || 0);
+  // coin_v = 2: máy học sinh đã dùng thang xu mới (giảm 5 lần). Bản app cũ còn lưu trong trình duyệt
+  // (chưa tải lại) sẽ không được ghi đè số xu trên máy chủ bằng số xu kiểu cũ.
+  const freshCoins = Number(req.body.coin_v) === 2;
+  const rawCoins = Math.max(0, Math.floor(Number(req.body.coins) || 0));
+  const coins = freshCoins ? rawCoins : Math.floor(rawCoins / 5);
   // en_stickers (Xe cộ) chỉ cộng thêm, không bị xóa bởi máy chưa có dữ liệu.
   const enSt = Array.isArray(req.body.en_stickers) ? [...new Set(req.body.en_stickers.map(Number).filter((i) => Number.isInteger(i) && i >= 0 && i < 48))] : [];
-  await pool.query(`INSERT INTO student_rewards(student_id,stickers,shop,coins,en_stickers,updated_at) VALUES($1,$2::jsonb,$3::jsonb,$4,$5::jsonb,now())
-    ON CONFLICT(student_id) DO UPDATE SET stickers=$2::jsonb,shop=$3::jsonb,coins=$4,
+  await pool.query(`INSERT INTO student_rewards(student_id,stickers,shop,coins,en_stickers,coin_v,updated_at) VALUES($1,$2::jsonb,$3::jsonb,$4,$5::jsonb,2,now())
+    ON CONFLICT(student_id) DO UPDATE SET stickers=$2::jsonb,shop=$3::jsonb,coins=CASE WHEN $6::boolean THEN $4 ELSE student_rewards.coins END,coin_v=2,
       en_stickers=(SELECT COALESCE(jsonb_agg(DISTINCT x ORDER BY x),'[]'::jsonb) FROM jsonb_array_elements(student_rewards.en_stickers || $5::jsonb) AS t(x)),
-      updated_at=now()`, [student.id, JSON.stringify(stickers), JSON.stringify(shop), coins, JSON.stringify(enSt)]);
+      updated_at=now()`, [student.id, JSON.stringify(stickers), JSON.stringify(shop), coins, JSON.stringify(enSt), freshCoins]);
   res.json({ ok: true });
 });
 

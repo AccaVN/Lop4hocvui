@@ -46,6 +46,7 @@ router.get('/parents', async (req, res) => {
 router.get('/users', async (req, res) => {
   const { rows } = await pool.query(`
     SELECT u.id, u.email, u.role, u.created_at, u.display_name,
+           (u.session_id IS NOT NULL) AS online, u.last_login_at, u.last_login_ip, u.last_login_device,
            COALESCE(s.name, u.display_name) AS name, s.gender, s.avatar, s.id AS student_id
     FROM users u LEFT JOIN students s ON s.user_id=u.id
     ORDER BY CASE u.role WHEN 'admin' THEN 0 WHEN 'parent' THEN 1 ELSE 2 END, COALESCE(s.name, u.display_name, u.email)
@@ -94,7 +95,10 @@ router.put('/users/:id', async (req, res) => {
     if (!u.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Không tìm thấy tài khoản' }); }
     const role = u.rows[0].role;
     if (email) await client.query('UPDATE users SET email=$1 WHERE id=$2', [String(email).toLowerCase().trim(), id]);
-    if (password) await client.query('UPDATE users SET password_hash=$1 WHERE id=$2', [await hashPassword(String(password)), id]);
+    // Admin đặt lại mật khẩu → đăng xuất tài khoản đó khỏi thiết bị đang dùng (trừ khi admin tự sửa chính mình)
+    if (password) await client.query(
+      'UPDATE users SET password_hash=$1, session_id = CASE WHEN id=$3 THEN session_id ELSE NULL END WHERE id=$2',
+      [await hashPassword(String(password)), id, req.user.id]);
     if (role === 'student') {
       if (typeof name === 'string' && !name.trim()) throw Object.assign(new Error('Tên học sinh không được để trống'), { status: 400 });
       await client.query('UPDATE students SET name=COALESCE($1,name), gender=COALESCE($2,gender), avatar=COALESCE($3,avatar) WHERE user_id=$4',
