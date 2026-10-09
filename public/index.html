@@ -1352,32 +1352,30 @@ function showJoinCodeModal(code,onClose){
   const m=modal(`<div class="big-ic">👪</div><h2>Mã liên kết phụ huynh</h2><p>Đưa mã này cho bố/mẹ để liên kết theo dõi kết quả học của con. Cả bố và mẹ đều dùng được chung mã này.</p><div style="font-size:28px;font-weight:800;letter-spacing:3px;text-align:center;padding:14px;background:var(--soft);border-radius:12px;margin:10px 0">${esc(code)}</div><button class="btn btn-go" id="jcOk">Đã lưu, bắt đầu học!</button>`,true);
   m.querySelector('#jcOk').onclick=()=>{m.remove();onClose&&onClose();};
 }
-function renderRoleGate(){Q=null;
-  app.innerHTML=`<div class="screen"><div class="onboard"><div class="owl" aria-hidden="true">🦉</div><h1>Học Vui Lớp 4</h1><p>Chào mừng! Bạn là ai nhỉ?</p>
+function renderRoleGate(){Q=null;renderAuthForm('any','login');}
+function renderRegisterPicker(){Q=null;
+  app.innerHTML=`<div class="screen"><div class="onboard"><div class="owl" aria-hidden="true">🦉</div><h1>Đăng ký tài khoản</h1><p>Bạn đăng ký cho ai nhỉ?</p>
   <button class="btn btn-go" id="rgStudent">👦 Học sinh</button>
   <button class="btn btn-soft" id="rgParent">👪 Phụ huynh</button>
-  <button class="btn btn-soft" id="rgAdmin" style="opacity:.65;font-size:14px">Đăng nhập quản trị</button>
+  <button class="btn btn-soft" id="rgBack">Đã có tài khoản? Đăng nhập</button>
   </div></div>`;
-  $('#rgStudent').onclick=()=>renderAuthForm('student','login');
-  $('#rgParent').onclick=()=>renderAuthForm('parent','login');
-  $('#rgAdmin').onclick=()=>renderAuthForm('admin','login');
+  $('#rgStudent').onclick=()=>renderAuthForm('student','register');
+  $('#rgParent').onclick=()=>renderAuthForm('parent','register');
+  $('#rgBack').onclick=renderRoleGate;
 }
 function renderAuthForm(role,mode){
-  mode='login'; // Đã tắt tự đăng ký — tài khoản do quản trị viên cấp
-  const titles={student:'Học sinh',parent:'Phụ huynh',admin:'Quản trị'};
-  const canRegister=false;
-  app.innerHTML=`<div class="screen"><div class="onboard"><div class="owl" aria-hidden="true">${role==='admin'?'🛠️':'🦉'}</div>
-  <h1>${titles[role]} — ${mode==='register'?'Đăng ký':'Đăng nhập'}</h1>
+  if(role==='any')mode='login';
+  const titles={any:'Học Vui Lớp 4',student:'Học sinh',parent:'Phụ huynh'};
+  app.innerHTML=`<div class="screen"><div class="onboard"><div class="owl" aria-hidden="true">🦉</div>
+  <h1>${role==='any'?titles.any+' — Đăng nhập':titles[role]+' — Đăng ký'}</h1>
   <label class="label" for="afEmail">Email</label><input class="field" id="afEmail" type="email" autocomplete="username">
   <label class="label" style="margin-top:14px" for="afPass">Mật khẩu</label><input class="field" id="afPass" type="password" autocomplete="${mode==='register'?'new-password':'current-password'}">
   ${mode==='register'&&role==='student'?`<label class="label" style="margin-top:14px" for="afName">Tên của con</label><input class="field" id="afName" maxlength="16" placeholder="Ví dụ: Bin">`:''}
   <div id="afErr" style="color:var(--berry-d);font-weight:700;min-height:20px;margin-top:10px"></div>
   <button class="btn btn-go" id="afGo">${mode==='register'?'Tạo tài khoản':'Đăng nhập'}</button>
-  ${role!=='admin'?`<p style="font-size:20px;font-weight:700;color:#e53935;margin-top:16px;line-height:1.5">Chưa có tài khoản? Liên hệ Admin - Zalo 0901.010993 nguyenanhlac93@gmail.com</p>`:''}
-  ${canRegister?`<button class="btn btn-soft" id="afSwitch">${mode==='register'?'Đã có tài khoản? Đăng nhập':'Chưa có tài khoản? Đăng ký'}</button>`:''}
-  <button class="btn btn-soft" id="afBack">Quay lại</button></div></div>`;
-  $('#afBack').onclick=renderRoleGate;
-  if(canRegister)$('#afSwitch').onclick=()=>renderAuthForm(role,mode==='register'?'login':'register');
+  ${role==='any'?`<button class="btn btn-soft" id="afSwitch">Chưa có tài khoản? Đăng ký</button>`:`<button class="btn btn-soft" id="afBack">Quay lại</button>`}
+  </div></div>`;
+  if(role==='any')$('#afSwitch').onclick=renderRegisterPicker;else $('#afBack').onclick=renderRegisterPicker;
   $('#afGo').onclick=async()=>{
     const email=$('#afEmail').value.trim(),pass=$('#afPass').value,errEl=$('#afErr');errEl.textContent='';
     if(!email||!pass){errEl.textContent='Nhập đủ email và mật khẩu nhé.';return;}

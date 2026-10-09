@@ -2,10 +2,51 @@ const router = require('express').Router();
 const pool = require('../db');
 const { hashPassword, comparePassword, newSessionId, signToken, authMiddleware } = require('../auth');
 
-// Đã TẮT tự đăng ký: tài khoản học sinh / phụ huynh chỉ do admin tạo trong trang quản trị.
-router.post(['/register', '/register/parent', '/register/student'], (req, res) => {
-  res.status(403).json({ error: 'Chức năng tạo tài khoản đã tắt. Vui lòng liên hệ quản trị viên để được cấp tài khoản.' });
-});
+// Tự đăng ký tài khoản học sinh / phụ huynh (admin vẫn chỉ tạo qua script hoặc SQL).
+async function createAccount(req, res, role) {
+  const { email, password, name } = req.body || {};
+  const mail = String(email || '').toLowerCase().trim();
+  if (!mail || !password) return res.status(400).json({ error: 'Thiếu email hoặc mật khẩu' });
+  if (!/^\S+@\S+$/.test(mail)) return res.status(400).json({ error: 'Email không hợp lệ' });
+  if (String(password).length < 4) return res.status(400).json({ error: 'Mật khẩu cần ít nhất 4 ký tự' });
+  const sname = String(name || '').trim().slice(0, 16);
+  if (role === 'student' && !sname) return res.status(400).json({ error: 'Nhập tên của con nhé' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const sid = newSessionId();
+    const hash = await hashPassword(String(password));
+    const ip = String(req.headers['x-real-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim().slice(0, 60);
+    const device = String(req.headers['user-agent'] || '').slice(0, 300);
+    const { rows } = await client.query(
+      'INSERT INTO users(email,password_hash,role,session_id,last_login_at,last_login_ip,last_login_device) VALUES($1,$2,$3,$4,now(),$5,$6) RETURNING id,email,role,display_name',
+      [mail, hash, role, sid, ip || null, device || null]);
+    const user = rows[0];
+    let student = null;
+    if (role === 'student') {
+      const crypto = require('crypto');
+      let joinCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+      for (let i = 0; i < 10; i++) {
+        const q = await client.query('SELECT 1 FROM students WHERE join_code=$1', [joinCode]);
+        if (!q.rowCount) break;
+        joinCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+      }
+      const r = await client.query('INSERT INTO students(user_id,name,join_code) VALUES($1,$2,$3) RETURNING id,name,avatar,join_code', [user.id, sname, joinCode]);
+      student = r.rows[0];
+    }
+    await client.query('COMMIT');
+    const out = { user, token: signToken(user, sid) };
+    if (student) out.student = student;
+    res.status(201).json(out);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    if (e.code === '23505') return res.status(409).json({ error: 'Email này đã được sử dụng' });
+    throw e;
+  } finally { client.release(); }
+}
+router.post('/register/student', (req, res) => createAccount(req, res, 'student'));
+router.post('/register/parent', (req, res) => createAccount(req, res, 'parent'));
+router.post('/register', (req, res) => createAccount(req, res, req.body && req.body.role === 'parent' ? 'parent' : 'student'));
 
 // Đăng nhập chung cho cả admin / phụ huynh / học sinh
 router.post('/login', async (req, res) => {
