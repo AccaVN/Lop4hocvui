@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const pool = require('../db');
-const { hashPassword, comparePassword, newSessionId, signToken, authMiddleware } = require('../auth');
+const { TRIAL_MSG, hashPassword, comparePassword, newSessionId, signToken, authMiddleware } = require('../auth');
 
 // Tự đăng ký tài khoản học sinh / phụ huynh (admin vẫn chỉ tạo qua script hoặc SQL).
 async function createAccount(req, res, role) {
@@ -19,7 +19,7 @@ async function createAccount(req, res, role) {
     const ip = String(req.headers['x-real-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim().slice(0, 60);
     const device = String(req.headers['user-agent'] || '').slice(0, 300);
     const { rows } = await client.query(
-      'INSERT INTO users(email,password_hash,role,session_id,last_login_at,last_login_ip,last_login_device) VALUES($1,$2,$3,$4,now(),$5,$6) RETURNING id,email,role,display_name',
+      'INSERT INTO users(email,password_hash,role,session_id,last_login_at,last_login_ip,last_login_device,trial_expires_at) VALUES($1,$2,$3,$4,now(),$5,$6,now() + interval \'14 days\') RETURNING id,email,role,display_name,trial_expires_at',
       [mail, hash, role, sid, ip || null, device || null]);
     const user = rows[0];
     let student = null;
@@ -57,6 +57,9 @@ router.post('/login', async (req, res) => {
   if (!user || !(await comparePassword(password, user.password_hash))) {
     return res.status(401).json({ error: 'Sai email hoặc mật khẩu' });
   }
+  if (user.role !== 'admin' && user.trial_expires_at && new Date(user.trial_expires_at) < new Date()) {
+    return res.status(403).json({ error: TRIAL_MSG, code: 'TRIAL_EXPIRED' });
+  }
   // Tạo phiên mới → thiết bị đang đăng nhập trước đó (nếu có) bị đá ra ở request kế tiếp
   const sid = newSessionId();
   const ip = String(req.headers['x-real-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim().slice(0, 60);
@@ -64,7 +67,7 @@ router.post('/login', async (req, res) => {
   await pool.query(
     'UPDATE users SET session_id=$1, last_login_at=now(), last_login_ip=$2, last_login_device=$3 WHERE id=$4',
     [sid, ip || null, device || null, user.id]);
-  res.json({ user: { id: user.id, email: user.email, role: user.role, display_name: user.display_name || null }, token: signToken(user, sid) });
+  res.json({ user: { id: user.id, email: user.email, role: user.role, display_name: user.display_name || null, trial_expires_at: user.trial_expires_at || null }, token: signToken(user, sid) });
 });
 
 // Đăng xuất: hủy phiên hiện tại trên máy chủ
@@ -74,7 +77,7 @@ router.post('/logout', authMiddleware, async (req, res) => {
 });
 
 router.get('/me', authMiddleware, async (req, res) => {
-  const { rows } = await pool.query('SELECT id, email, role, display_name FROM users WHERE id=$1', [req.user.id]);
+  const { rows } = await pool.query('SELECT id, email, role, display_name, trial_expires_at FROM users WHERE id=$1', [req.user.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Tài khoản không còn tồn tại' });
   res.json({ user: rows[0] });
 });

@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('./db');
 
 const SECRET = process.env.JWT_SECRET;
+const TRIAL_MSG = 'Tài khoản dùng thử đã hết 14 ngày. Vui lòng liên hệ quản trị viên để chuyển sang tài khoản chính thức.';
 
 function hashPassword(pw) {
   return bcrypt.hash(pw, 10);
@@ -36,8 +37,11 @@ async function authMiddleware(req, res, next) {
     return res.status(401).json({ error: 'Token không hợp lệ hoặc đã hết hạn' });
   }
   try {
-    const { rows } = await pool.query('SELECT session_id, last_login_at, last_login_device FROM users WHERE id=$1', [payload.id]);
+    const { rows } = await pool.query('SELECT session_id, last_login_at, last_login_device, role, (trial_expires_at IS NOT NULL AND trial_expires_at < now()) AS trial_expired FROM users WHERE id=$1', [payload.id]);
     if (!rows[0]) return res.status(401).json({ error: 'Tài khoản không còn tồn tại' });
+    if (rows[0].trial_expired && rows[0].role !== 'admin') {
+      return res.status(401).json({ error: TRIAL_MSG, code: 'TRIAL_EXPIRED' });
+    }
     if (!payload.sid || rows[0].session_id !== payload.sid) {
       return res.status(401).json({
         error: 'Tài khoản đã đăng nhập trên thiết bị khác. Vui lòng đăng nhập lại.',
@@ -63,4 +67,4 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { hashPassword, comparePassword, newSessionId, signToken, authMiddleware, requireRole };
+module.exports = { TRIAL_MSG, hashPassword, comparePassword, newSessionId, signToken, authMiddleware, requireRole };

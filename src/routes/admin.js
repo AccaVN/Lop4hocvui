@@ -45,7 +45,7 @@ router.get('/parents', async (req, res) => {
 // Quản lý tài khoản: admin được thêm/sửa/xóa học sinh và phụ huynh.
 router.get('/users', async (req, res) => {
   const { rows } = await pool.query(`
-    SELECT u.id, u.email, u.role, u.created_at, u.display_name,
+    SELECT u.id, u.email, u.role, u.created_at, u.display_name, u.trial_expires_at,
            (u.session_id IS NOT NULL) AS online, u.last_login_at, u.last_login_ip, u.last_login_device,
            COALESCE(s.name, u.display_name) AS name, s.gender, s.avatar, s.id AS student_id
     FROM users u LEFT JOIN students s ON s.user_id=u.id
@@ -56,13 +56,13 @@ router.get('/users', async (req, res) => {
 
 router.post('/users', async (req, res) => {
   const { email, password, role, name, gender, avatar } = req.body;
-  if (!email || !password || !['student','parent'].includes(role)) return res.status(400).json({ error: 'Email, mật khẩu và loại tài khoản là bắt buộc' });
+  if (!email || !password || !['student','parent','admin'].includes(role)) return res.status(400).json({ error: 'Email, mật khẩu và loại tài khoản là bắt buộc' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const hash = await hashPassword(password);
     if (String(password).length < 4) throw Object.assign(new Error('Mật khẩu cần ít nhất 4 ký tự'), { status: 400 });
-    const { rows } = await client.query('INSERT INTO users(email,password_hash,role,display_name) VALUES($1,$2,$3,$4) RETURNING id,email,role,created_at', [email.toLowerCase().trim(), hash, role, role === 'parent' && name ? String(name).trim().slice(0, 40) : null]);
+    const { rows } = await client.query('INSERT INTO users(email,password_hash,role,display_name) VALUES($1,$2,$3,$4) RETURNING id,email,role,created_at', [email.toLowerCase().trim(), hash, role, role !== 'student' && name ? String(name).trim().slice(0, 40) : null]);
     const user = rows[0];
     if (role === 'student') {
       if (!name || !name.trim()) throw Object.assign(new Error('Tên học sinh là bắt buộc'), { status: 400 });
@@ -84,7 +84,7 @@ router.post('/users', async (req, res) => {
 // Học sinh: tên nằm ở bảng students. Admin/phụ huynh: tên hiển thị ở users.display_name.
 router.put('/users/:id', async (req, res) => {
   const id = req.params.id;
-  const { email, password, name, gender, avatar } = req.body;
+  const { email, password, name, gender, avatar, make_official } = req.body;
   if (password != null && password !== '' && String(password).length < 4) return res.status(400).json({ error: 'Mật khẩu cần ít nhất 4 ký tự' });
   if (email != null && email !== '' && !/^\S+@\S+$/.test(String(email).trim())) return res.status(400).json({ error: 'Email không hợp lệ' });
   if (name != null && typeof name === 'string' && name.trim().length > 40) return res.status(400).json({ error: 'Tên tối đa 40 ký tự' });
@@ -94,6 +94,12 @@ router.put('/users/:id', async (req, res) => {
     const u = await client.query('SELECT id, role FROM users WHERE id=$1', [id]);
     if (!u.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Không tìm thấy tài khoản' }); }
     const role = u.rows[0].role;
+    if (make_official) {
+      const t = await client.query('SELECT trial_expires_at FROM users WHERE id=$1', [id]);
+      const exp = t.rows[0].trial_expires_at;
+      if (exp && new Date(exp) > new Date()) throw Object.assign(new Error('Tài khoản chưa quá 14 ngày dùng thử nên chưa thể chuyển sang chính thức'), { status: 400 });
+      await client.query('UPDATE users SET trial_expires_at=NULL WHERE id=$1', [id]);
+    }
     if (email) await client.query('UPDATE users SET email=$1 WHERE id=$2', [String(email).toLowerCase().trim(), id]);
     // Admin đặt lại mật khẩu → đăng xuất tài khoản đó khỏi thiết bị đang dùng (trừ khi admin tự sửa chính mình)
     if (password) await client.query(
@@ -115,11 +121,25 @@ router.put('/users/:id', async (req, res) => {
   } finally { client.release(); }
 });
 
-router.delete('/users/:id', async (req,res)=>{
-  const id=req.params.id;
-  const r=await pool.query("DELETE FROM users WHERE id=$1 AND role <> 'admin' RETURNING id,email,role",[id]);
-  if(!r.rows[0]) return res.status(404).json({error:'Không tìm thấy tài khoản hoặc không thể xóa admin'});
-  res.json({ok:true,user:r.rows[0]});
+// Xóa tài khoản. Admin chỉ xóa được khi hệ thống còn từ 2 admin trở lên (luôn giữ lại ít nhất 1 admin).
+router.delete('/users/:id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(7001)'); // tránh 2 admin cùng xóa nhau một lúc
+    const u = await client.query('SELECT id, role FROM users WHERE id=$1', [req.params.id]);
+    if (!u.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Không tìm thấy tài khoản' }); }
+    if (u.rows[0].role === 'admin') {
+      const c = await client.query("SELECT count(*)::int AS n FROM users WHERE role='admin'");
+      if (c.rows[0].n < 2) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Chỉ xóa được tài khoản admin khi có từ 2 admin trở lên' }); }
+    }
+    const r = await client.query('DELETE FROM users WHERE id=$1 RETURNING id,email,role', [req.params.id]);
+    await client.query('COMMIT');
+    res.json({ ok: true, user: r.rows[0] });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally { client.release(); }
 });
 
 // Giọng đọc chuẩn (nữ + nam) cho toàn bộ học sinh
