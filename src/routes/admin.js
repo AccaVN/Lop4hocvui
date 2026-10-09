@@ -54,8 +54,16 @@ router.get('/users', async (req, res) => {
   res.json({ users: rows });
 });
 
+// Số ngày dùng thử hợp lệ (1–3650); bỏ trống / 0 = không đặt (tài khoản chính thức)
+function parseTrialDays(v) {
+  if (v == null || v === '' || Number(v) === 0) return 0;
+  const d = Number(v);
+  if (!Number.isInteger(d) || d < 1 || d > 3650) throw Object.assign(new Error('Số ngày dùng thử phải từ 1 đến 3650'), { status: 400 });
+  return d;
+}
+
 router.post('/users', async (req, res) => {
-  const { email, password, role, name, gender, avatar } = req.body;
+  const { email, password, role, name, gender, avatar, trial_days } = req.body;
   if (!email || !password || !['student','parent','admin'].includes(role)) return res.status(400).json({ error: 'Email, mật khẩu và loại tài khoản là bắt buộc' });
   const client = await pool.connect();
   try {
@@ -64,6 +72,8 @@ router.post('/users', async (req, res) => {
     if (String(password).length < 4) throw Object.assign(new Error('Mật khẩu cần ít nhất 4 ký tự'), { status: 400 });
     const { rows } = await client.query('INSERT INTO users(email,password_hash,role,display_name) VALUES($1,$2,$3,$4) RETURNING id,email,role,created_at', [email.toLowerCase().trim(), hash, role, role !== 'student' && name ? String(name).trim().slice(0, 40) : null]);
     const user = rows[0];
+    const td = parseTrialDays(trial_days);
+    if (td && role !== 'admin') await client.query('UPDATE users SET trial_expires_at = now() + make_interval(days => $1) WHERE id=$2', [td, user.id]);
     if (role === 'student') {
       if (!name || !name.trim()) throw Object.assign(new Error('Tên học sinh là bắt buộc'), { status: 400 });
       const crypto = require('crypto');
@@ -84,7 +94,7 @@ router.post('/users', async (req, res) => {
 // Học sinh: tên nằm ở bảng students. Admin/phụ huynh: tên hiển thị ở users.display_name.
 router.put('/users/:id', async (req, res) => {
   const id = req.params.id;
-  const { email, password, name, gender, avatar, make_official } = req.body;
+  const { email, password, name, gender, avatar, make_official, trial_days } = req.body;
   if (password != null && password !== '' && String(password).length < 4) return res.status(400).json({ error: 'Mật khẩu cần ít nhất 4 ký tự' });
   if (email != null && email !== '' && !/^\S+@\S+$/.test(String(email).trim())) return res.status(400).json({ error: 'Email không hợp lệ' });
   if (name != null && typeof name === 'string' && name.trim().length > 40) return res.status(400).json({ error: 'Tên tối đa 40 ký tự' });
@@ -94,11 +104,14 @@ router.put('/users/:id', async (req, res) => {
     const u = await client.query('SELECT id, role FROM users WHERE id=$1', [id]);
     if (!u.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Không tìm thấy tài khoản' }); }
     const role = u.rows[0].role;
+    // Admin chuyển chính thức (bất cứ lúc nào) hoặc đặt/đổi hạn dùng thử = N ngày kể từ hôm nay
     if (make_official) {
-      const t = await client.query('SELECT trial_expires_at FROM users WHERE id=$1', [id]);
-      const exp = t.rows[0].trial_expires_at;
-      if (exp && new Date(exp) > new Date()) throw Object.assign(new Error('Tài khoản chưa quá 14 ngày dùng thử nên chưa thể chuyển sang chính thức'), { status: 400 });
       await client.query('UPDATE users SET trial_expires_at=NULL WHERE id=$1', [id]);
+    } else if (trial_days != null) {
+      const td = parseTrialDays(trial_days);
+      if (!td) throw Object.assign(new Error('Hãy nhập số ngày dùng thử'), { status: 400 });
+      if (role === 'admin') throw Object.assign(new Error('Không đặt dùng thử cho tài khoản admin'), { status: 400 });
+      await client.query('UPDATE users SET trial_expires_at = now() + make_interval(days => $1) WHERE id=$2', [td, id]);
     }
     if (email) await client.query('UPDATE users SET email=$1 WHERE id=$2', [String(email).toLowerCase().trim(), id]);
     // Admin đặt lại mật khẩu → đăng xuất tài khoản đó khỏi thiết bị đang dùng (trừ khi admin tự sửa chính mình)
