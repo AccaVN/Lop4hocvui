@@ -1,6 +1,10 @@
 const router = require('express').Router();
 const pool = require('../db');
 const { authMiddleware, requireRole } = require('../auth');
+const { saveAttempt, recalcTotal, studentDetail, toInt } = require('../score');
+
+// Ngày học tính theo giờ Việt Nam (máy chủ Vercel/Neon chạy giờ UTC)
+const VN_TODAY = "(now() AT TIME ZONE 'Asia/Ho_Chi_Minh')::date";
 const { rankingForUser } = require('../rank');
 
 async function getOwnStudent(userId) {
@@ -34,7 +38,7 @@ router.get('/me/home', async (req, res) => {
           COALESCE(SUM(pr.stars), 0)::int AS total_stars,
           COALESCE(
             json_agg(
-              json_build_object('level_key', pr.level_key, 'stars', pr.stars)
+              json_build_object('level_key', pr.level_key, 'stars', pr.stars, 'best', GREATEST(pr.best_stars, pr.stars), 'points', pr.points)
               ORDER BY pr.level_key
             ),
             '[]'::json
@@ -44,7 +48,7 @@ router.get('/me/home', async (req, res) => {
       ) p ON TRUE
       LEFT JOIN student_rewards r ON r.student_id = s.id
       LEFT JOIN daily_sessions d
-        ON d.student_id = s.id AND d.day = CURRENT_DATE
+        ON d.student_id = s.id AND d.day = ${VN_TODAY}
       WHERE s.user_id = $1
       LIMIT 1
       `,
@@ -84,7 +88,7 @@ router.get('/me/rewards', async (req, res) => {
               COALESCE((
                 SELECT json_agg(substr(p.level_key, 4)::int)
                 FROM progress p
-                WHERE p.student_id = s.id AND p.level_key ~ '^en_[0-9]+$' AND p.stars >= 1
+                WHERE p.student_id = s.id AND p.level_key ~ '^en_[0-9]+$' AND GREATEST(p.best_stars, p.stars) >= 1
               ), '[]'::json) AS en_done
        FROM students s
        LEFT JOIN student_rewards r ON r.student_id = s.id
@@ -117,12 +121,20 @@ router.get('/me', async (req, res) => {
   const student = await getOwnStudent(req.user.id);
   if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   const [progress, skills, sessions, rewards] = await Promise.all([
-    pool.query('SELECT level_key, stars FROM progress WHERE student_id=$1', [student.id]),
+    pool.query('SELECT level_key, stars, GREATEST(best_stars, stars) AS best, points FROM progress WHERE student_id=$1', [student.id]),
     pool.query('SELECT skill_key, correct, total FROM skill_stats WHERE student_id=$1', [student.id]),
     pool.query('SELECT day, seconds FROM daily_sessions WHERE student_id=$1 ORDER BY day DESC LIMIT 30', [student.id]),
     pool.query('SELECT stickers, shop, coins, en_stickers FROM student_rewards WHERE student_id=$1', [student.id]),
   ]);
   res.json({ student, progress: progress.rows, skills: skills.rows, sessions: sessions.rows, rewards: rewards.rows[0] || {stickers: [], shop: [], coins: 0} });
+});
+
+// Báo cáo học tập của chính con (Góc phụ huynh trên máy của con) — giống dữ liệu phụ huynh xem
+router.get('/me/report', async (req, res) => {
+  const student = await getOwnStudent(req.user.id);
+  if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
+  res.set('Cache-Control', 'private, no-cache');
+  res.json(await studentDetail(student.id));
 });
 
 // Cập nhật tên / nhân vật / giới tính (gọi khi học sinh đổi tên hoặc chọn lại nhân vật)
@@ -146,13 +158,33 @@ router.get('/me/rank', async (req, res) => {
   res.json({ students: list, me: list.find((x) => x.me) || null });
 });
 
-// Điểm tích lũy chỉ tăng, không thể bị giảm bởi client.
+// Tổng điểm do MÁY CHỦ tính (tổng điểm lần làm cuối của từng bài + điểm luyện nói).
+// Bản app cũ còn mở trên máy học sinh vẫn gọi API này với tổng cộng dồn → bỏ qua giá trị gửi lên.
 router.put('/me/points', async (req, res) => {
   const student = await getOwnStudent(req.user.id);
   if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
-  const points = Math.max(0, Math.floor(Number(req.body.total_points) || 0));
-  const { rows } = await pool.query(`UPDATE students SET total_points=GREATEST(total_points,$1) WHERE id=$2 RETURNING total_points`, [points, student.id]);
-  res.json({ ok:true, total_points: rows[0].total_points });
+  res.json({ ok: true, total_points: await recalcTotal(student.id) });
+});
+
+// Điểm luyện nói/từ vựng: chỉ cộng phần con đọc TỐT HƠN lần trước (client gửi phần chênh lệch).
+router.post('/me/bonus', async (req, res) => {
+  const student = await getOwnStudent(req.user.id);
+  if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
+  const pts = toInt(req.body.points, 0, 10);
+  if (pts > 0) await pool.query('UPDATE students SET bonus_points = bonus_points + $1 WHERE id=$2', [pts, student.id]);
+  res.json({ ok: true, total_points: await recalcTotal(student.id) });
+});
+
+// Nộp kết quả 1 lần làm bài/đề/tính nhẩm. Kết quả này THAY THẾ lần làm trước của cùng bài.
+router.post('/me/attempt', async (req, res) => {
+  const student = await getOwnStudent(req.user.id);
+  if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
+  try {
+    res.json(await saveAttempt(student.id, req.body || {}));
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    throw e;
+  }
 });
 
 router.put('/me/rewards', async (req, res) => {
@@ -174,21 +206,23 @@ router.put('/me/rewards', async (req, res) => {
   res.json({ ok: true });
 });
 
-// Lưu/tăng số sao cho 1 bài (gọi mỗi khi học sinh hoàn thành 1 level)
+// Bản cũ / bài luyện nói: chỉ ghi số sao (không có điểm). Bài làm thường dùng POST /me/attempt.
 router.put('/me/progress', async (req, res) => {
   const { level_key, stars } = req.body;
   if (!level_key || stars == null) return res.status(400).json({ error: 'Thiếu level_key hoặc stars' });
   const student = await getOwnStudent(req.user.id);
+  if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
+  const st = toInt(stars, 0, 5);
   await pool.query(
-    `INSERT INTO progress (student_id, level_key, stars, updated_at) VALUES ($1,$2,$3, now())
+    `INSERT INTO progress (student_id, level_key, stars, best_stars, attempts, updated_at) VALUES ($1,$2,$3,$3,1, now())
      ON CONFLICT (student_id, level_key)
-     DO UPDATE SET stars = GREATEST(progress.stars, $3), updated_at = now()`,
-    [student.id, level_key, stars]
+     DO UPDATE SET stars = GREATEST(progress.stars, $3), best_stars = GREATEST(progress.best_stars, $3), updated_at = now()`,
+    [student.id, level_key, st]
   );
   res.json({ ok: true });
 });
 
-// Cộng dồn số câu đúng/tổng số câu theo kỹ năng
+// (Cũ) Cộng dồn đúng/sai theo kỹ năng. Bản mới gửi kỹ năng kèm /me/attempt (chỉ lần cuối).
 router.post('/me/skill', async (req, res) => {
   const { skill_key, correct, total } = req.body;
   if (!skill_key) return res.status(400).json({ error: 'Thiếu skill_key' });
@@ -204,12 +238,13 @@ router.post('/me/skill', async (req, res) => {
 
 // Cộng dồn thời gian học trong ngày hôm nay (giây)
 router.post('/me/session', async (req, res) => {
-  const { seconds } = req.body;
+  const seconds = toInt(req.body.seconds, 0, 3 * 3600);
   const student = await getOwnStudent(req.user.id);
+  if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   await pool.query(
-    `INSERT INTO daily_sessions (student_id, day, seconds) VALUES ($1, CURRENT_DATE, $2)
+    `INSERT INTO daily_sessions (student_id, day, seconds) VALUES ($1, ${VN_TODAY}, $2)
      ON CONFLICT (student_id, day) DO UPDATE SET seconds = daily_sessions.seconds + $2`,
-    [student.id, seconds || 0]
+    [student.id, seconds]
   );
   res.json({ ok: true });
 });
