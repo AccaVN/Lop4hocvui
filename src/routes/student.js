@@ -182,7 +182,7 @@ router.put('/me/profile', async (req, res) => {
 router.get('/me/rank', async (req, res) => {
   const { meId, list } = await rankingForUser(req.user.id);
   if (meId == null) {
-    // Bảng xếp hạng chưa có ai (hoặc con đang dùng thử nên không có tên trên bảng)
+    // Bảng xếp hạng chưa có ai
     const me = await pool.query('SELECT id FROM students WHERE user_id=$1', [req.user.id]);
     if (!me.rows[0]) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   }
