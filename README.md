@@ -164,3 +164,21 @@ Chạy thử ở máy: `npm install` → tạo `.env` (DATABASE_URL, JWT_SECRET)
 - **Tốc độ**: mục Thành tích hiện ngay từ dữ liệu trên máy rồi cập nhật nền; dữ liệu Thành tích được tải trước khi máy rảnh;
   file giọng thu sẵn tải sau khi trang đã hiện; mỗi API Thành tích chỉ 1 truy vấn tới Neon.
 - **Đổi mật khẩu**: dùng `PUT /api/auth/me` (thay cho `POST /api/auth/change-password` cũ).
+
+## Giao diện & bài tập kiểu Duolingo
+
+Lớp giao diện/bài tập kiểu Duolingo nằm trong `tools/duolingo/duolingo.js` và được chèn vào cuối `public/index.html`
+(giữa hai dòng `<!--DUO:START-->` … `<!--DUO:END-->`). Sửa file nguồn rồi chạy lại để cập nhật:
+
+```bash
+python3 tools/duolingo/inject.py public/index.html
+```
+
+- **Giao diện**: thanh tiến độ xanh, `COMBO xN` (vàng từ x5), ô chọn, thanh phản hồi xanh/đỏ, nút bấm viết hoa giống Duolingo.
+- **Dạng bài mới cho tiếng Anh** (tự trộn vào mỗi bài English, tối đa 3 câu/bài, thay một số câu trắc nghiệm):
+  - *Nối cặp* (“Nhấn vào các cặp tương ứng”): từ ↔ nghĩa, nghe 🔊 ↔ hình, câu ↔ nghĩa. Sai tối đa 1 lần vẫn tính đúng.
+  - *Gõ lại* (từ 1 trở lên, Lớp Lá không có vì bé chưa biết gõ): nhìn hình/nghĩa gõ từ tiếng Anh, hoặc nghe rồi gõ.
+  - *Dịch câu* bằng các từ cho sẵn kèm từ gây nhiễu (từ lớp 1).
+- **Làm lại câu sai**: hết bài, các câu làm sai (Toán, Chữ cái, English) được hỏi lại; câu nào vẫn sai thì sang vòng
+  tiếp theo, đến khi đúng hết mới hiện kết quả. Sao/điểm/xu/thống kê chỉ tính theo **lần làm đầu tiên**; vòng ôn lại không
+  cộng điểm. Không áp dụng cho Luyện đề thi và Luyện nói.
