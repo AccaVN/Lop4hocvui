@@ -7,6 +7,13 @@ const { saveAttempt, recalcTotal, studentDetail, toInt, saveSpeak } = require('.
 const VN_TODAY = "(now() AT TIME ZONE 'Asia/Ho_Chi_Minh')::date";
 const { rankingForUser } = require('../rank');
 
+// Mã học sinh đã được authMiddleware lấy sẵn (req.user.student_id) → không tốn thêm 1 query.
+// Chỉ tra lại DB khi chưa có (vd. tài khoản vừa được chuyển đổi).
+async function ownStudentRef(user) {
+  if (user.student_id != null) return { id: user.student_id };
+  return getOwnStudent(user.id);
+}
+
 async function getOwnStudent(userId) {
   const { rows } = await pool.query('SELECT id, user_id, name, avatar, gender, join_code, created_at, total_points FROM students WHERE user_id=$1', [userId]);
   return rows[0];
@@ -159,7 +166,7 @@ router.get('/me', async (req, res) => {
 
 // Báo cáo học tập của chính con (Góc phụ huynh trên máy của con) — giống dữ liệu phụ huynh xem
 router.get('/me/report', async (req, res) => {
-  const student = await getOwnStudent(req.user.id);
+  const student = await ownStudentRef(req.user);
   if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   res.set('Cache-Control', 'private, no-cache');
   res.json(await studentDetail(student.id));
@@ -168,7 +175,7 @@ router.get('/me/report', async (req, res) => {
 // Cập nhật tên / nhân vật / giới tính (gọi khi học sinh đổi tên hoặc chọn lại nhân vật)
 router.put('/me/profile', async (req, res) => {
   const { name, avatar, gender } = req.body;
-  const student = await getOwnStudent(req.user.id);
+  const student = await ownStudentRef(req.user);
   if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   await pool.query(
     `UPDATE students SET name = COALESCE($1, name), avatar = COALESCE($2, avatar), gender = COALESCE($3, gender) WHERE id=$4`,
@@ -193,14 +200,14 @@ router.get('/me/rank', async (req, res) => {
 // Tổng điểm do MÁY CHỦ tính (tổng điểm lần làm cuối của từng bài + điểm luyện nói).
 // Bản app cũ còn mở trên máy học sinh vẫn gọi API này với tổng cộng dồn → bỏ qua giá trị gửi lên.
 router.put('/me/points', async (req, res) => {
-  const student = await getOwnStudent(req.user.id);
+  const student = await ownStudentRef(req.user);
   if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   res.json({ ok: true, total_points: await recalcTotal(student.id) });
 });
 
 // (Bản cũ) Điểm luyện nói cộng theo phần chênh lệch — nay thay bằng POST /me/speak, API này không cộng nữa.
 router.post('/me/bonus', async (req, res) => {
-  const student = await getOwnStudent(req.user.id);
+  const student = await ownStudentRef(req.user);
   if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   res.json({ ok: true, total_points: await recalcTotal(student.id) });
 });
@@ -209,14 +216,14 @@ router.post('/me/bonus', async (req, res) => {
 // kỷ lục của chính từ/câu đó (đổi sang máy khác cũng không nhận lại điểm).
 // Body: { items: { "<item_key>": sao } }
 router.post('/me/speak', async (req, res) => {
-  const student = await getOwnStudent(req.user.id);
+  const student = await ownStudentRef(req.user);
   if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   res.json(await saveSpeak(student.id, (req.body && req.body.items) || {}));
 });
 
 // Nộp kết quả 1 lần làm bài/đề/tính nhẩm. Kết quả này THAY THẾ lần làm trước của cùng bài.
 router.post('/me/attempt', async (req, res) => {
-  const student = await getOwnStudent(req.user.id);
+  const student = await ownStudentRef(req.user);
   if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   try {
     res.json(await saveAttempt(student.id, req.body || {}));
@@ -227,7 +234,7 @@ router.post('/me/attempt', async (req, res) => {
 });
 
 router.put('/me/rewards', async (req, res) => {
-  const student = await getOwnStudent(req.user.id);
+  const student = await ownStudentRef(req.user);
   if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   const stickers = Array.isArray(req.body.stickers) ? req.body.stickers.map(Number).filter(Number.isInteger) : [];
   const shop = Array.isArray(req.body.shop) ? req.body.shop.map(Number).filter(Number.isInteger) : [];
@@ -249,7 +256,7 @@ router.put('/me/rewards', async (req, res) => {
 router.put('/me/progress', async (req, res) => {
   const { level_key, stars } = req.body;
   if (!level_key || stars == null) return res.status(400).json({ error: 'Thiếu level_key hoặc stars' });
-  const student = await getOwnStudent(req.user.id);
+  const student = await ownStudentRef(req.user);
   if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   const st = toInt(stars, 0, 5);
   await pool.query(
@@ -265,7 +272,7 @@ router.put('/me/progress', async (req, res) => {
 router.post('/me/skill', async (req, res) => {
   const { skill_key, correct, total } = req.body;
   if (!skill_key) return res.status(400).json({ error: 'Thiếu skill_key' });
-  const student = await getOwnStudent(req.user.id);
+  const student = await ownStudentRef(req.user);
   await pool.query(
     `INSERT INTO skill_stats (student_id, skill_key, correct, total) VALUES ($1,$2,$3,$4)
      ON CONFLICT (student_id, skill_key)
@@ -278,7 +285,7 @@ router.post('/me/skill', async (req, res) => {
 // Cộng dồn thời gian học trong ngày hôm nay (giây)
 router.post('/me/session', async (req, res) => {
   const seconds = toInt(req.body.seconds, 0, 3 * 3600);
-  const student = await getOwnStudent(req.user.id);
+  const student = await ownStudentRef(req.user);
   if (!student) return res.status(404).json({ error: 'Không tìm thấy hồ sơ học sinh' });
   await pool.query(
     `INSERT INTO daily_sessions (student_id, day, seconds) VALUES ($1, ${VN_TODAY}, $2)
